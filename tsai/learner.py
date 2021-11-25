@@ -3,14 +3,14 @@
 __all__ = ['load_all', 'load_learner_all', 'get_arch', 'all_archs', 'all_archs_names', 'ts_learner', 'tsimage_learner']
 
 # Cell
-from fastai.learner import *
-from fastai.vision.models.all import *
-from fastai.data.transforms import *
 from .imports import *
 from .data.core import *
 from .data.validation import *
 from .models.all import *
 from .models.InceptionTimePlus import *
+from fastai.learner import *
+from fastai.vision.models.all import *
+from fastai.data.transforms import *
 
 # Cell
 @patch
@@ -18,7 +18,6 @@ def show_batch(self:Learner, **kwargs):
     self.dls.show_batch(**kwargs)
 
 # Cell
-
 @patch
 def remove_all_cbs(self:Learner, max_iters=10):
     i = 0
@@ -291,7 +290,6 @@ def tsimage_learner(dls, arch=None, pretrained=False,
 def decoder(self:Learner, o): return L([self.dls.decodes(oi) for oi in o])
 
 # Cell
-
 @patch
 @delegates(GatherPredsCallback.__init__)
 def get_X_preds(self: Learner, X, y=None, bs=64, with_input=False, with_decoded=True, with_loss=False, **kwargs):

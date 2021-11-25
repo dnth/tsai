@@ -1,6 +1,3 @@
-from sktime.utils.validation.panel import check_X
-from sktime.datasets._data_io import load_UCR_UEA_dataset
-from sktime.utils.data_io import load_from_tsfile_to_dataframe as ts2df
 import fastai
 from fastai.imports import *
 from fastai.data.all import *
@@ -11,12 +8,12 @@ from fastai.callback.all import *
 from fastai.vision.data import *
 from fastai.interpret import *
 from fastai.optimizer import *
-from fastai.torch_core import Module
 from fastai.data.transforms import get_files
 from fastai.tabular.all import *
 import fastcore
 from fastcore.test import *
 from fastcore.utils import *
+
 import torch
 import torch.nn as nn
 import scipy as sp
@@ -32,10 +29,10 @@ import pytz # timezone
 import sklearn
 from sklearn.linear_model import LogisticRegression, RidgeClassifierCV # needed by rocket!
 from IPython.display import Audio, display, HTML, Javascript, clear_output
+from IPython.core.display import Javascript, display, HTML    
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-PATH = Path(os.getcwd())
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 cpus = defaults.cpus
 
@@ -54,16 +51,23 @@ def is_colab():
     from IPython.core import getipython
     return 'google.colab' in str(getipython.get_ipython())
 
-def save_nb(wait=2, verbose=True):
+def is_lab():
+    import re
+    import psutil
+    return any(re.search('jupyter-lab', x) for x in psutil.Process().parent().cmdline())
+
+def is_colab():
+    from IPython.core import getipython
+    return 'google.colab' in str(getipython.get_ipython())
+
+def to_local_time(t, time_format='%Y-%m-%d %H:%M:%S'):
+    return time.strftime(time_format, time.localtime(t))
+
+def _save_nb():
     """
     Save and checkpoints current jupyter notebook.
     """
-    from IPython.core.display import Javascript, display, HTML
-    import time
-    if is_colab(): 
-        if verbose: print('cannot save the notebook in Google Colab. Confir the notebook is saved or save it manually.')
-        time.sleep(wait)
-    elif is_lab():
+    if is_lab():
         script = """
         this.nextElementSibling.focus();
         this.dispatchEvent(new KeyboardEvent('keydown', {key:'s', keyCode: 83, metaKey: true}));
@@ -72,9 +76,45 @@ def save_nb(wait=2, verbose=True):
                       '<input style="width:0;height:0;border:0">').format(script)))
     else:
         display(Javascript('IPython.notebook.save_checkpoint();'))
+        
+def save_nb(nb_name=None, attempts=1, verbose=True, wait=2):
+    """
+    Save and checkpoints current jupyter notebook. 1 attempt per second.
+    """
+    
+    if nb_name is None:
+        if is_colab(): 
+            if verbose: 
+                print('cannot save the notebook in Google Colab. Save it manually.')
+        else:
+            _save_nb()
+    else:
+        saved = False
+        current_time = time.time()
+        if is_colab(): 
+            if verbose: print(f'cannot save the notebook in Google Colab. Last saved {to_local_time(os.path.getmtime(nb_name))}.')
+        else: 
+            for i in range(attempts):
+                _save_nb() 
+                # confirm it's saved. This takes come variable time.
+                for j in range(20):
+                    time.sleep(.5)
+                    saved_time = os.path.getmtime(nb_name)
+                    if  saved_time >= current_time: break
+                if saved_time >= current_time: 
+                    saved = True
+                    break
+        assert saved, f"{nb_name} couldn't be saved."
+        if verbose:
+            print(f'{nb_name} saved at {to_local_time(saved_time)}.')
     time.sleep(wait)
 
-def last_saved(max_elapsed=60):
+def maybe_mount_drive():
+    from pathlib import Path
+    from google.colab.drive import mount
+    if not Path("/content/drive").exists(): mount("/content/drive")
+
+def all_last_saved(max_elapsed=60):
     print('\n')
     lib_path = Path(os.getcwd()).parent
     folder = lib_path / 'tsai'
@@ -99,10 +139,26 @@ def last_saved(max_elapsed=60):
     else:
         print('Incorrect conversion! 😔')
         output = 0
-    print(f'Total time elapsed {elapsed:.0f} s')
+    print(f'Total time elapsed {elapsed:.3f} s')
     print(strftime("%A %d/%m/%y %T %Z"))
     return output
 
+def py_last_saved(nb_name, max_elapsed=1):
+    print('\n')
+    lib_path = Path(os.getcwd()).parent
+    folder = Path(lib_path / 'tsai')
+    script_name = str(folder/".".join([str(nb_name).split("_")[1:][0].replace(".ipynb", "").replace(".", "/"), "py"]))
+    elapsed_time = time.time() - os.path.getmtime(script_name)
+    if elapsed_time < max_elapsed:
+        print('Correct conversion! 😃')
+        output = 1
+    else:
+        print(f"{script_name:30} saved {elapsed_time:10.0f} s ago ***")
+        print('Incorrect conversion! 😔')
+        output = 0
+    print(f'Total time elapsed {elapsed_time:.3f} s')
+    print(strftime("%A %d/%m/%y %T %Z"))
+    return output
 
 def beep(inp=1, duration=.1, n=1):
     rate = 10000
@@ -112,13 +168,17 @@ def beep(inp=1, duration=.1, n=1):
         display(Audio(wave, rate=10000, autoplay=True))
         time.sleep(duration / .1)
 
-
-def create_scripts(max_elapsed=60):
+def create_scripts(nb_name=None, max_elapsed=60, wait=2):
     from nbdev.export import notebook2script
-    save_nb()
-    notebook2script()
-    return last_saved(max_elapsed)
-
+    if nb_name is not None: wait = 0
+    try: save_nb(nb_name)
+    except: save_nb(wait=wait)
+    time.sleep(0.5)
+    notebook2script(nb_name)
+    if nb_name is None: output = all_last_saved(max_elapsed=max_elapsed)
+    else: output = py_last_saved(nb_name=nb_name, max_elapsed=max_elapsed)
+    beep(output)
+    return output
 
 class Timer:
     def start(self, verbose=True): 
@@ -215,9 +275,13 @@ def my_setup(*pkgs):
     try: 
         import torch
         print(f'torch          : {torch.__version__}')
-        iscuda = torch.cuda.is_available()
-        print(f'n_cpus         : {cpus}')
-        print(f'device         : {device} ({torch.cuda.get_device_name(0)})' if iscuda else f'device         : {device}')
+        try:
+            import torch_xla
+            print(f'device         : TPU')
+        except:
+            iscuda = torch.cuda.is_available()
+            print(f'n_cpus         : {cpus}')
+            print(f'device         : {device} ({torch.cuda.get_device_name(0)})' if iscuda else f'device         : {device}')
     except: print(f'torch          : N/A')
         
 computer_setup = my_setup
